@@ -182,6 +182,8 @@ h1.logo{font-family:'Cinzel',serif;font-weight:900;letter-spacing:.16em;font-siz
 .legend hr{border:0;border-top:1px solid var(--line);margin:12px 0;}
 .legend b{color:var(--gold);}
 .savemsg{font-size:12px;color:var(--c2);min-height:16px;}
+.stat.moves.flash{animation:mflash .8s ease;}
+@keyframes mflash{0%{transform:scale(1)}30%{transform:scale(1.1);box-shadow:0 0 20px rgba(244,213,141,.55)}100%{transform:scale(1)}}
 </style>
 </head>
 <body>
@@ -329,7 +331,16 @@ function getLevelConfig(n){
   }else if(type==='ice'){
     cfg.frostCount=Math.min(8+Math.floor(n/10),rows*cols-12); cfg.moves+=4;
   }
+  cfg.baseMoves=cfg.moves;
+  cfg.moves=calcMoves(n,cfg.moves);
   return cfg;
+}
+// Budget de coups calculé automatiquement et imposé au lancement (pas de choix).
+// Serré pour le stress, mais déterministe : un même niveau donne toujours le même budget.
+function calcMoves(n,raw){
+  const r=mulberry32(n*99991+7);
+  const factor=0.72+r()*0.12;          // 0,72–0,84 du budget de base → tendu mais jouable
+  return Math.max(6,Math.round(raw*factor));
 }
 function objIcon(cfg){return cfg.type==='ice'?'❄':cfg.type==='collect'?'◇':'✦';}
 
@@ -357,6 +368,7 @@ function startLevel(n){
   }
   frostLeft=frost.flat().filter(Boolean).length;
   renderAll();updateHUD();updateObjective();scheduleHint();
+  const ms=document.querySelector('.stat.moves');if(ms){ms.classList.remove('flash');void ms.offsetWidth;ms.classList.add('flash');}
 }
 function buildGrid(){
   const rnd=mulberry32(cfg.n*7919+13);
