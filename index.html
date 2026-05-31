@@ -184,6 +184,16 @@ h1.logo{font-family:'Cinzel',serif;font-weight:900;letter-spacing:.16em;font-siz
 .savemsg{font-size:12px;color:var(--c2);min-height:16px;}
 .stat.moves.flash{animation:mflash .8s ease;}
 @keyframes mflash{0%{transform:scale(1)}30%{transform:scale(1.1);box-shadow:0 0 20px rgba(244,213,141,.55)}100%{transform:scale(1)}}
+.set-row{display:flex;align-items:center;justify-content:space-between;gap:12px;text-align:left;
+  border:1px solid var(--line);background:var(--panel);border-radius:16px;padding:13px 14px;margin:10px 0;}
+.set-row .sl{font-family:'Cinzel',serif;font-weight:700;font-size:15px;color:var(--cream);}
+.set-row .sd{font-size:11px;color:var(--muted);margin-top:2px;line-height:1.3;}
+.toggle{flex:0 0 auto;width:52px;height:30px;border-radius:30px;border:1px solid var(--line);
+  background:rgba(255,255,255,.08);position:relative;cursor:pointer;transition:background .2s,border-color .2s;padding:0;}
+.toggle::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;
+  background:var(--muted);transition:left .2s,background .2s;}
+.toggle.on{background:linear-gradient(90deg,var(--gold2),var(--gold));border-color:var(--gold);}
+.toggle.on::after{left:25px;background:#2a1c05;}
 </style>
 </head>
 <body>
@@ -205,6 +215,7 @@ h1.logo{font-family:'Cinzel',serif;font-weight:900;letter-spacing:.16em;font-siz
     <div class="home-mini">
       <button class="btn ghost" id="selectBtn">Niveaux</button>
       <button class="btn ghost" id="helpBtn">Spéciaux</button>
+      <button class="btn ghost" id="setBtn">Paramètres</button>
       <button class="btn ghost" id="saveBtn">Sauvegarde</button>
     </div>
     <p class="subtle" id="homeProg" style="font-size:12px"></p>
@@ -237,6 +248,7 @@ h1.logo{font-family:'Cinzel',serif;font-weight:900;letter-spacing:.16em;font-siz
       <div class="stat"><div class="k">Niveau</div><div class="v" id="hLevel">1</div></div>
       <div class="stat moves"><div class="k">Coups</div><div class="v" id="hMoves">20</div></div>
       <div class="stat"><div class="k">Score</div><div class="v" id="hScore">0</div></div>
+      <button class="iconbtn" id="gameSettings">⚙</button>
     </div>
     <div class="obj-bar" id="objBar"></div>
     <div class="boardwrap"><div class="board" id="board"></div></div>
@@ -271,6 +283,15 @@ h1.logo{font-family:'Cinzel',serif;font-weight:900;letter-spacing:.16em;font-siz
       <div class="row"><button class="btn" id="helpClose">Compris</button></div>
     </div>
   </div>
+  <div class="overlay" id="setOv">
+    <div class="modal">
+      <h2 style="font-size:22px">Paramètres</h2>
+      <div class="set-row"><div><div class="sl">Effets sonores</div><div class="sd">Sons des combinaisons et gemmes spéciales</div></div><button class="toggle" id="tgSound" aria-label="Effets sonores"></button></div>
+      <div class="set-row"><div><div class="sl">Musique</div><div class="sd">Ambiance de fond douce</div></div><button class="toggle" id="tgMusic" aria-label="Musique"></button></div>
+      <div class="set-row"><div><div class="sl">Vibrations</div><div class="sd">Retour haptique à chaque coup</div></div><button class="toggle" id="tgVibe" aria-label="Vibrations"></button></div>
+      <div class="row" style="margin-top:8px"><button class="btn" id="setClose">Fermer</button></div>
+    </div>
+  </div>
   <div class="overlay" id="saveOv">
     <div class="modal">
       <h2 style="font-size:22px">Sauvegarde</h2>
@@ -299,14 +320,69 @@ const WORLD_NAMES=['Aube','Nébuleuse','Comète','Éclipse','Aurore','Galaxie','
 const ROMAN=['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 const SP={NONE:null,STRIPED_H:'striped_h',STRIPED_V:'striped_v',WRAPPED:'wrapped',BOMB:'bomb'};
 
-let progress={maxLevel:1,stars:{}};
+let progress={maxLevel:1,stars:{},settings:{sound:true,music:true,vibrate:true}};
+let settings={sound:true,music:true,vibrate:true};
 async function loadProgress(){
   try{ if(window.storage&&window.storage.get){ const r=await window.storage.get('prisma_progress'); if(r&&r.value) progress=JSON.parse(r.value); } }catch(e){}
   if(!progress.stars)progress.stars={}; if(!progress.maxLevel)progress.maxLevel=1;
+  if(!progress.settings)progress.settings={};
+  settings.sound  = progress.settings.sound  !==false;
+  settings.music  = progress.settings.music  !==false;
+  settings.vibrate= progress.settings.vibrate!==false;
 }
 async function saveProgress(){
+  progress.settings={sound:settings.sound,music:settings.music,vibrate:settings.vibrate};
   try{ if(window.storage&&window.storage.set){ await window.storage.set('prisma_progress',JSON.stringify(progress)); } }catch(e){}
 }
+
+/* ---------- audio engine (Web Audio, aucun fichier externe) ---------- */
+let audioCtx=null, musicGain=null, musicTimer=null, musicStep=0;
+function ensureAudio(){
+  if(!audioCtx){ try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ audioCtx=null; } }
+  if(audioCtx&&audioCtx.state==='suspended'){ audioCtx.resume(); }
+}
+function tone(freq,dur,type,vol,when){
+  if(!settings.sound||!audioCtx)return;
+  const t=(when||audioCtx.currentTime);
+  const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+  o.type=type||'sine';o.frequency.value=freq;
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.linearRampToValueAtTime(vol||0.13,t+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+(dur||0.14));
+  o.connect(g);g.connect(audioCtx.destination);
+  o.start(t);o.stop(t+(dur||0.14)+0.03);
+}
+function sfxSwap(){ tone(300,0.06,'sine',0.06); }
+function sfxMatch(chain){ if(!settings.sound||!audioCtx)return; const base=430+Math.min(chain||1,7)*55;
+  tone(base,0.12,'triangle',0.11); tone(base*1.5,0.10,'sine',0.06,audioCtx.currentTime+0.05); }
+function sfxSpecial(){ if(!settings.sound||!audioCtx)return; const t=audioCtx.currentTime;
+  [660,990,1320].forEach((f,i)=>tone(f,0.16,'sine',0.12,t+i*0.06)); }
+function sfxWin(){ if(!settings.sound||!audioCtx)return; const t=audioCtx.currentTime;
+  [523,659,784,1047].forEach((f,i)=>tone(f,0.26,'triangle',0.14,t+i*0.12)); }
+function sfxLose(){ if(!settings.sound||!audioCtx)return; const t=audioCtx.currentTime;
+  [392,330,262].forEach((f,i)=>tone(f,0.3,'sine',0.12,t+i*0.14)); }
+function buzz(ms){ if(settings.vibrate&&navigator.vibrate){ try{navigator.vibrate(ms);}catch(e){} } }
+
+const MUSIC_NOTES=[261.63,329.63,392.00,329.63,293.66,349.23,440.00,349.23,261.63,392.00,329.63,293.66];
+function startMusic(){
+  if(!settings.music||!audioCtx||musicTimer)return;
+  musicGain=audioCtx.createGain();musicGain.gain.value=0.05;musicGain.connect(audioCtx.destination);
+  const note=()=>{ if(!audioCtx||!musicGain)return;
+    const f=MUSIC_NOTES[musicStep%MUSIC_NOTES.length];musicStep++;
+    const t=audioCtx.currentTime;
+    const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+    o.type='sine';o.frequency.value=f;
+    g.gain.setValueAtTime(0.0001,t);g.gain.linearRampToValueAtTime(1,t+0.5);g.gain.exponentialRampToValueAtTime(0.0001,t+1.6);
+    o.connect(g);g.connect(musicGain);o.start(t);o.stop(t+1.7);
+    const o2=audioCtx.createOscillator(),g2=audioCtx.createGain();
+    o2.type='sine';o2.frequency.value=f*0.5;
+    g2.gain.setValueAtTime(0.0001,t);g2.gain.linearRampToValueAtTime(0.5,t+0.5);g2.gain.exponentialRampToValueAtTime(0.0001,t+1.8);
+    o2.connect(g2);g2.connect(musicGain);o2.start(t);o2.stop(t+1.9);
+  };
+  note();musicTimer=setInterval(note,950);
+}
+function stopMusic(){ if(musicTimer){clearInterval(musicTimer);musicTimer=null;} if(musicGain){try{musicGain.disconnect();}catch(e){}musicGain=null;} }
+function applyMusicState(){ if(settings.music)startMusic(); else stopMusic(); }
 
 function mulberry32(seed){return function(){let t=seed+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296;};}
 
@@ -332,15 +408,17 @@ function getLevelConfig(n){
     cfg.frostCount=Math.min(8+Math.floor(n/10),rows*cols-12); cfg.moves+=4;
   }
   cfg.baseMoves=cfg.moves;
-  cfg.moves=calcMoves(n,cfg.moves);
+  cfg.moves=calcMoves(n);
   return cfg;
 }
-// Budget de coups calculé automatiquement et imposé au lancement (pas de choix).
-// Serré pour le stress, mais déterministe : un même niveau donne toujours le même budget.
-function calcMoves(n,raw){
-  const r=mulberry32(n*99991+7);
-  const factor=0.72+r()*0.12;          // 0,72–0,84 du budget de base → tendu mais jouable
-  return Math.max(6,Math.round(raw*factor));
+// Budget de coups imposé au lancement, qui CHUTE VITE sur les premiers niveaux
+// puis se stabilise. Déterministe : un niveau donne toujours le même budget.
+function calcMoves(n){
+  const startM=19, floorM=11, tau=13;            // 19 coups au niveau 1 → ~11 vers le niveau 50
+  let base=floorM+(startM-floorM)*Math.exp(-(n-1)/tau);
+  base-=Math.min(3,Math.floor(n/500));           // léger resserrement très tardif
+  const j=Math.round((mulberry32(n*99991+7)()-0.5)*2); // jitter -1/0/+1, propre à chaque niveau
+  return Math.max(8,Math.round(base)+j);
 }
 function objIcon(cfg){return cfg.type==='ice'?'❄':cfg.type==='collect'?'◇':'✦';}
 
@@ -437,7 +515,7 @@ function findHintMove(){
 
 const gemAt=(r,c)=>inBounds(r,c)?grid[r][c]:null;
 function onPointerDown(e){
-  if(busy)return;const g=findGemByEl(e.currentTarget);if(!g)return;clearHint();
+  if(busy)return;ensureAudio();const g=findGemByEl(e.currentTarget);if(!g)return;clearHint();
   drag={g,x:e.clientX,y:e.clientY};
   e.currentTarget.setPointerCapture&&e.currentTarget.setPointerCapture(e.pointerId);
   e.currentTarget.addEventListener('pointermove',onPointerMove);
@@ -471,14 +549,14 @@ async function attemptSwap(g1,g2){
   const bothSpecial=g1.special&&g2.special;
   const bombNormal=(g1.special===SP.BOMB&&!g2.special)||(g2.special===SP.BOMB&&!g1.special);
   if(bothSpecial||bombNormal){
-    movesLeft--;updateHUD();
+    movesLeft--;updateHUD();buzz(40);sfxSpecial();
     const set=comboClear(g1,g2);
     applyClass(g1);applyClass(g2);
     await resolveCascades(set);afterMove();return;
   }
   const runs=findRuns();
-  if(runs.length===0){await animateSwap(g1,g2);doSwap(g1,g2);busy=false;scheduleHint();return;}
-  movesLeft--;updateHUD();
+  if(runs.length===0){await animateSwap(g1,g2);doSwap(g1,g2);busy=false;buzz(12);scheduleHint();return;}
+  movesLeft--;updateHUD();buzz(25);sfxSwap();
   await resolveCascades(null,[g1,g2]);afterMove();
 }
 function doSwap(g1,g2){const r1=g1.r,c1=g1.c;grid[g1.r][g1.c]=g2;grid[g2.r][g2.c]=g1;g1.r=g2.r;g1.c=g2.c;g2.r=r1;g2.c=c1;}
@@ -545,12 +623,14 @@ async function resolveCascades(forcedCells,swapped){
 
     const popped=[];
     clears.forEach(k=>{const p=k.split('_').map(Number);const g=grid[p[0]][p[1]];if(g){popped.push(g);spawnSparks(p[0],p[1],g);}});
+    sfxMatch(chain); if(clears.size>=6)buzz(30);
     popped.forEach(g=>g.el.classList.add('pop'));
     refreshFrostView();
     await sleep(260);
     popped.forEach(g=>{if(g.el)g.el.remove();});
     clears.forEach(k=>{const p=k.split('_').map(Number);grid[p[0]][p[1]]=null;});
 
+    if(specialsToCreate.length)sfxSpecial();
     specialsToCreate.forEach(s=>{const old=grid[s.r][s.c];if(old&&old.el)old.el.remove();const g=makeGem(s.type);g.special=s.special;grid[s.r][s.c]=g;g.r=s.r;g.c=s.c;makeGemEl(g);g.el.classList.add('drop-in');});
 
     updateHUD();updateObjective();
@@ -639,6 +719,11 @@ function objectiveMet(){
   if(cfg.type==='ice')return frostLeft<=0;
   return false;
 }
+// objectif "final" = barre pleine = 3 étoiles. Atteint → on enchaîne tout de suite.
+function maxReached(){
+  if(cfg.type==='score')return score>=cfg.target*1.8;
+  return objectiveMet();
+}
 function computeStars(){
   if(cfg.type==='score'){const ratio=score/cfg.target;return ratio>=1.8?3:ratio>=1.4?2:1;}
   const r=movesLeft/cfg.moves;return r>=0.4?3:r>=0.18?2:1;
@@ -646,12 +731,12 @@ function computeStars(){
 
 function afterMove(){
   updateHUD();updateObjective();
-  if(cfg.type!=='score'&&objectiveMet()){busy=true;setTimeout(winLevel,350);return;}
+  if(maxReached()){busy=true;setTimeout(winLevel,300);return;}
   if(movesLeft<=0){busy=true;setTimeout(()=>{ if(objectiveMet())winLevel();else loseLevel(); },400);return;}
   busy=false;scheduleHint();
 }
 async function winLevel(){
-  clearHint();
+  clearHint();sfxWin();buzz([0,40,40,40]);
   const stars=computeStars();
   const prev=progress.stars[cfg.n]||0;
   if(stars>prev)progress.stars[cfg.n]=stars;
@@ -665,7 +750,7 @@ async function winLevel(){
   show('winOv');
 }
 function loseLevel(){
-  clearHint();
+  clearHint();sfxLose();buzz(140);
   const msgs={score:'Score insuffisant.',collect:'Récolte incomplète.',ice:'Il reste du givre.'};
   document.getElementById('loseMsg').textContent=(msgs[cfg.type]||'')+' Plus de coups !';
   show('loseOv');
@@ -700,7 +785,7 @@ function renderWorld(){
   document.getElementById('prevWorld').style.visibility=viewWorld>0?'visible':'hidden';
   document.getElementById('nextWorld').style.visibility=end<TOTAL_LEVELS?'visible':'hidden';
 }
-function launch(n){hide('winOv');hide('loseOv');goScreen('game');requestAnimationFrame(()=>startLevel(n));}
+function launch(n){hide('winOv');hide('loseOv');ensureAudio();applyMusicState();goScreen('game');requestAnimationFrame(()=>startLevel(n));}
 
 function buildSaveCode(){return btoa(unescape(encodeURIComponent(JSON.stringify(progress))));}
 function doExport(){const code=buildSaveCode();document.getElementById('saveCode').value=code;
@@ -719,7 +804,10 @@ async function doImport(){
   const raw=document.getElementById('importCode').value.trim();if(!raw)return;
   try{
     const obj=JSON.parse(decodeURIComponent(escape(atob(raw))));
-    if(typeof obj.maxLevel==='number'&&obj.stars){progress=obj;await saveProgress();
+    if(typeof obj.maxLevel==='number'&&obj.stars){progress=obj;
+      if(!progress.settings)progress.settings={};
+      settings.sound=progress.settings.sound!==false;settings.music=progress.settings.music!==false;settings.vibrate=progress.settings.vibrate!==false;
+      await saveProgress();applyMusicState();
       document.getElementById('saveMsg').textContent='Sauvegarde importée !';renderHomeProgress();}
     else throw 0;
   }catch(e){document.getElementById('saveMsg').textContent='Code invalide.';}
@@ -743,8 +831,24 @@ function buildLegend(){
     <div style="margin:6px 0">• <b>Prisme + Prisme</b> : efface la grille entière !</div>`;
 }
 
-document.getElementById('playBtn').addEventListener('click',()=>launch(progress.maxLevel));
+function renderSettings(){
+  document.getElementById('tgSound').classList.toggle('on',settings.sound);
+  document.getElementById('tgMusic').classList.toggle('on',settings.music);
+  document.getElementById('tgVibe').classList.toggle('on',settings.vibrate);
+}
+function openSettings(){ensureAudio();renderSettings();show('setOv');}
+function toggleSound(){settings.sound=!settings.sound;renderSettings();saveProgress();if(settings.sound){ensureAudio();sfxSwap();}}
+function toggleMusic(){settings.music=!settings.music;renderSettings();saveProgress();ensureAudio();applyMusicState();}
+function toggleVibe(){settings.vibrate=!settings.vibrate;renderSettings();saveProgress();if(settings.vibrate)buzz(30);}
+
+document.getElementById('playBtn').addEventListener('click',()=>{ensureAudio();applyMusicState();launch(progress.maxLevel);});
 document.getElementById('selectBtn').addEventListener('click',openSelect);
+document.getElementById('setBtn').addEventListener('click',openSettings);
+document.getElementById('gameSettings').addEventListener('click',openSettings);
+document.getElementById('setClose').addEventListener('click',()=>hide('setOv'));
+document.getElementById('tgSound').addEventListener('click',toggleSound);
+document.getElementById('tgMusic').addEventListener('click',toggleMusic);
+document.getElementById('tgVibe').addEventListener('click',toggleVibe);
 document.getElementById('helpBtn').addEventListener('click',()=>{buildLegend();show('helpOv');});
 document.getElementById('helpClose').addEventListener('click',()=>hide('helpOv'));
 document.getElementById('saveBtn').addEventListener('click',()=>{document.getElementById('saveMsg').textContent='';document.getElementById('saveCode').value='';document.getElementById('importCode').value='';show('saveOv');});
